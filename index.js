@@ -1,5 +1,4 @@
 require('dotenv').config();
-const express = require('express');
 const { Pool } = require('pg');
 const { initClient } = require('messagebird');
 const OpenAI = require('openai');
@@ -14,15 +13,17 @@ const openai = new OpenAI({
   },
 });
 
-const app = express();
-
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-app.post('/webhook', (req, res) => {
+exports.whatsAppWebhook = (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
+  }
+
   let rawBody = '';
-  req.on('data', chunk => {
+  req.on('data', (chunk) => {
     rawBody += chunk.toString();
   });
 
@@ -32,71 +33,77 @@ app.post('/webhook', (req, res) => {
     console.log('Raw Body Received:', rawBody);
     console.log('------------------------');
 
-    // Due to the limitations of Flow Builder, we must make assumptions.
-    // 1. The body is the text of the message.
-    // 2. We can get the sender's number from the `x-messagebird-originator` header.
-    const text = rawBody;
-    const from = req.headers['x-messagebird-originator'];
-
-    if (!text || !from) {
-      console.log('[WARN] Webhook received without text or originator. Acknowledging.');
-      return res.status(200).send('OK');
+    let payload;
+    try {
+      // The body from Flow Builder is now a proper JSON string
+      payload = JSON.parse(rawBody);
+    } catch (e) {
+      console.error('[ERROR] Failed to parse incoming webhook body as JSON:', e);
+      // It's crucial to send a 200 OK to prevent MessageBird from retrying.
+      return res.status(200).send('Webhook processed, non-JSON body.');
     }
+    
+    const { message } = payload;
 
-    console.log(`[INFO] Received message from ${from}: "${text}"`);
+    if (message && message.direction === 'received') {
+      const from = message.from;
+      const text = message.content.text;
 
-    // RAG logic
-    (async () => {
-      try {
-        const client = await pool.connect();
-        console.log('[INFO] Connected to database.');
+      console.log(`[INFO] Received message from ${from}: "${text}"`);
 
-        const query = 'SELECT content FROM documents WHERE content % $1 LIMIT 1';
-        const result = await client.query(query, [text]);
-        console.log('[INFO] Database query executed.');
+      (async () => {
+        try {
+          const client = await pool.connect();
+          console.log('[INFO] Connected to database.');
 
-        let context = "No relevant context found.";
-        if (result.rows.length > 0) {
-          context = result.rows[0].content;
-          console.log('[INFO] Found context in database:', context);
-        } else {
-          console.log('[INFO] No context found for the given message.');
-        }
+          const query = 'SELECT content FROM documents WHERE content % $1 LIMIT 1';
+          const result = await client.query(query, [text]);
+          console.log('[INFO] Database query executed.');
 
-        console.log('[INFO] Sending request to OpenRouter...');
-        const completion = await openai.chat.completions.create({
-          model: 'google/gemini-2.5-flash-lite-preview-06-17',
-          messages: [
-            { role: 'system', content: `You are a helpful assistant. Use the following context to answer the user's question. Context: ${context}` },
-            { role: 'user', content: text },
-          ],
-        });
-
-        const replyText = completion.choices[0].message.content;
-        console.log('[INFO] Received response from OpenRouter:', replyText);
-
-        console.log(`[INFO] Sending new message to ${from} with: "${replyText}"`);
-        messagebird.messages.create({
-          originator: process.env.MESSAGEBIRD_CHANNEL_ID, // Your WhatsApp number Channel ID
-          recipients: [ from ],
-          body: replyText
-        }, (err, response) => {
-          if (err) {
-            console.error('[ERROR] Failed to send message via MessageBird:', err);
-            return;
+          let context = "No relevant context found.";
+          if (result.rows.length > 0) {
+            context = result.rows[0].content;
+            console.log('[INFO] Found context in database:', context);
+          } else {
+            console.log('[INFO] No context found for the given message.');
           }
-          console.log('[SUCCESS] Message sent successfully:', response);
-        });
 
-        client.release();
-        console.log('[INFO] Database connection released.');
-      } catch (err) {
-        console.error('[ERROR] An error occurred in the RAG logic:', err.stack);
-      }
-    })();
+          console.log('[INFO] Sending request to OpenRouter...');
+          const completion = await openai.chat.completions.create({
+            model: 'google/gemini-2.5-flash-lite-preview-06-17',
+            messages: [
+              { role: 'system', content: `You are a helpful assistant. Use the following context to answer the user's question. Context: ${context}` },
+              { role: 'user', content: text },
+            ],
+          });
 
-    res.status(200).send('OK');
+          const replyText = completion.choices[0].message.content;
+          console.log('[INFO] Received response from OpenRouter:', replyText);
+
+          // We must use conversations.reply now that we have the full message object
+          console.log(`[INFO] Replying to conversation ${message.conversationId} with: "${replyText}"`);
+          messagebird.conversations.reply(message.conversationId, {
+            type: 'text',
+            content: { text: replyText }
+          }, (err, response) => {
+            if (err) {
+              console.error('[ERROR] Failed to send reply via MessageBird:', err);
+              return;
+            }
+            console.log('[SUCCESS] Reply sent successfully:', response);
+          });
+
+          client.release();
+          console.log('[INFO] Database connection released.');
+        } catch (err) {
+          console.error('[ERROR] An error occurred in the RAG logic:', err.stack);
+        }
+      })();
+
+      res.status(200).send('Webhook processed successfully.');
+    } else {
+      console.log('[INFO] Webhook received, but not a processable inbound message. Acknowledging.');
+      res.status(200).send('Webhook processed, not an inbound message.');
+    }
   });
-});
-
-exports.whatsAppWebhook = app;
+};
