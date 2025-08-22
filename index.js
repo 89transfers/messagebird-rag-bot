@@ -15,28 +15,33 @@ const openai = new OpenAI({
 });
 
 const app = express();
-// Use text parser because Flow Builder sends the payload as raw text
-// while keeping the Content-Type header as application/json.
-app.use(express.text({ type: 'application/json' }));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
 app.post('/webhook', (req, res) => {
-  console.log('--- Incoming Webhook ---');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('Raw Body:', req.body);
-  console.log('------------------------');
+  let rawBody = '';
+  req.on('data', chunk => {
+    rawBody += chunk.toString();
+  });
 
-  // The body is raw text from the message. There's no JSON to parse.
-  // We also don't have the "from" address reliably.
-  // This is a significant limitation of the Flow Builder's "Call API" step.
-  // We will assume the body is the text and proceed.
-  const text = req.body;
-  const from = req.headers['x-messagebird-originator']; // Attempt to get the sender from headers
+  req.on('end', () => {
+    console.log('--- Incoming Webhook ---');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Raw Body Received:', rawBody);
+    console.log('------------------------');
 
-  if (text && from) {
+    // Due to the limitations of Flow Builder, we must make assumptions.
+    // 1. The body is the text of the message.
+    // 2. We can get the sender's number from the `x-messagebird-originator` header.
+    const text = rawBody;
+    const from = req.headers['x-messagebird-originator'];
+
+    if (!text || !from) {
+      console.log('[WARN] Webhook received without text or originator. Acknowledging.');
+      return res.status(200).send('OK');
+    }
 
     console.log(`[INFO] Received message from ${from}: "${text}"`);
 
@@ -72,7 +77,7 @@ app.post('/webhook', (req, res) => {
 
         console.log(`[INFO] Sending new message to ${from} with: "${replyText}"`);
         messagebird.messages.create({
-          originator: process.env.MESSAGEBIRD_CHANNEL_ID,
+          originator: process.env.MESSAGEBIRD_CHANNEL_ID, // Your WhatsApp number Channel ID
           recipients: [ from ],
           body: replyText
         }, (err, response) => {
@@ -91,10 +96,7 @@ app.post('/webhook', (req, res) => {
     })();
 
     res.status(200).send('OK');
-  } else {
-    console.log('[INFO] Webhook received, but not a processable message. Acknowledging.');
-    res.status(200).send('OK');
-  }
+  });
 });
 
 exports.whatsAppWebhook = app;
