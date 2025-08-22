@@ -15,7 +15,9 @@ const openai = new OpenAI({
 });
 
 const app = express();
-app.use(express.json());
+// Use text parser because Flow Builder sends the payload as raw text
+// while keeping the Content-Type header as application/json.
+app.use(express.text({ type: 'application/json' }));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -24,11 +26,19 @@ const pool = new Pool({
 app.post('/webhook', (req, res) => {
   console.log('--- Incoming Webhook ---');
   console.log('Timestamp:', new Date().toISOString());
-  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('Raw Body:', req.body);
   console.log('------------------------');
 
-  // The `payload` variable from Flow Builder should contain the message object.
-  const { message } = req.body;
+  // Manually construct the message object from the raw payload
+  let payload;
+  try {
+    payload = JSON.parse(req.body);
+  } catch (e) {
+    console.error('[ERROR] Could not parse incoming payload as JSON.', e);
+    return res.status(400).send('Invalid JSON');
+  }
+  
+  const { message } = payload;
 
   if (message && message.direction === 'received') {
     const from = message.from;
