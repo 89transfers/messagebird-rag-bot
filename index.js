@@ -72,3 +72,20 @@ exports.whatsAppWebhook = (req, res) => {
     res.status(200).send('OK');
   });
 };
+
+const port = process.env.PORT || 8080;
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+  // Route the request to the webhook handler
+  if (req.url === '/' || req.url === '/webhook') {
+    exports.whatsAppWebhook(req, res);
+  } else {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
+});
+
+server.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
+});
