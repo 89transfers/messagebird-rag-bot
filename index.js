@@ -29,20 +29,14 @@ app.post('/webhook', (req, res) => {
   console.log('Raw Body:', req.body);
   console.log('------------------------');
 
-  // Manually construct the message object from the raw payload
-  let payload;
-  try {
-    payload = JSON.parse(req.body);
-  } catch (e) {
-    console.error('[ERROR] Could not parse incoming payload as JSON.', e);
-    return res.status(400).send('Invalid JSON');
-  }
-  
-  const { message } = payload;
+  // The body is raw text from the message. There's no JSON to parse.
+  // We also don't have the "from" address reliably.
+  // This is a significant limitation of the Flow Builder's "Call API" step.
+  // We will assume the body is the text and proceed.
+  const text = req.body;
+  const from = req.headers['x-messagebird-originator']; // Attempt to get the sender from headers
 
-  if (message && message.direction === 'received') {
-    const from = message.from;
-    const text = message.content.text;
+  if (text && from) {
 
     console.log(`[INFO] Received message from ${from}: "${text}"`);
 
@@ -76,16 +70,17 @@ app.post('/webhook', (req, res) => {
         const replyText = completion.choices[0].message.content;
         console.log('[INFO] Received response from OpenRouter:', replyText);
 
-        console.log(`[INFO] Replying to ${from} with: "${replyText}"`);
-        messagebird.conversations.reply(message.conversationId, {
-          type: 'text',
-          content: { text: replyText }
+        console.log(`[INFO] Sending new message to ${from} with: "${replyText}"`);
+        messagebird.messages.create({
+          originator: process.env.MESSAGEBIRD_CHANNEL_ID,
+          recipients: [ from ],
+          body: replyText
         }, (err, response) => {
           if (err) {
-            console.error('[ERROR] Failed to send reply via MessageBird:', err);
+            console.error('[ERROR] Failed to send message via MessageBird:', err);
             return;
           }
-          console.log('[SUCCESS] Reply sent successfully via MessageBird:', response);
+          console.log('[SUCCESS] Message sent successfully:', response);
         });
 
         client.release();
