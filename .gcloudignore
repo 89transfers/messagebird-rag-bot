@@ -1,0 +1,12 @@
+# This file tells gcloud to ignore these files when deploying.
+# See https://cloud.google.com/sdk/gcloud/reference/topic/gcloudignore for more information.
+
+# Ignore the node_modules directory
+node_modules/
+
+# Ignore local environment files
+.env
+
+# Ignore system files
+.DS_Store
+*.swp
