@@ -4,7 +4,8 @@
   "description": "WhatsApp automation with MessageBird and Neon.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "gcp-build": ""
   },
   "keywords": [],
   "author": "",
